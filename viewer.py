@@ -236,37 +236,70 @@ def viewing(dataset, opt, pipe, checkpoint,
         env_map = None
         
     gaussians.env_map = env_map
+
+    fps = 60
+    increment_fps = 30
+    # Calculate the time per frame in seconds
+    time_per_frame_milliseconds = int(1000 / fps)  # 1000 milliseconds / 60 fps
+    #time_per_frame_seconds = 1.0 / fps  # 1 second / 60 fps
+    increment_per_frame_seconds = 1.0 / increment_fps
         
     viewpoint_cam = readCamerasFromTransforms(args.transforms_path, gaussians.time_duration[1]) #batch_data[batch_idx]
     viewpoint_cam = viewpoint_cam.cuda()
 
-    target_timestamp = 1.0
+    target_timestamp = 0.0
     viewpoint_cam.timestamp = target_timestamp
-
-    
-
+    time_direction = 1.0
+    time_pause = 1.0
 
     with torch.no_grad():
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         img = render_pkg["render"].detach().clone().permute(1,2,0).cpu().numpy()
+        img = img[:, :, [2, 1, 0]]
 
         cv2.namedWindow('Render', cv2.WINDOW_NORMAL)
 
         while True:
             # Render the image to the window
             cv2.imshow('Render', img)
-
+ 
             # Wait for a key event
-            key = cv2.waitKey(0) & 0xFF
-            print(key)
+            key = cv2.waitKey(time_per_frame_milliseconds) & 0xFF
+            
             if key == 27:  # Exit on ESC
                 break
+            elif key == ord('q'):   #slow down
+                increment_fps += 10
+            elif key == ord('e'):   #speed up
+                increment_fps -= 10
+            elif key == ord('r'):   #reverse
+                time_direction *= -1 
+            elif key == ord('f'):   #pause/unpause
+                if time_pause > 0:
+                    time_pause = 0.0
+                elif time_pause < 1:
+                    time_pause = 1.0
+
+            increment_fps = np.clip(increment_fps, 10, 400)
+            increment_per_frame_seconds = 1.0 / increment_fps
 
             # Update the camera based on the key
             viewpoint_cam = update_camera(key, viewpoint_cam).cuda()
 
+            # Update the timestamp based on the processing time
+            new_timestamp = viewpoint_cam.timestamp + (increment_per_frame_seconds * time_direction * time_pause)
+            # Clamp the new timestamp to your time_duration bounds
+            if time_direction > 0 and new_timestamp > time_duration[1]:
+                new_timestamp = time_duration[0]
+            elif time_direction < 0 and new_timestamp < time_duration[0]:
+                new_timestamp = time_duration[1]
+
+            viewpoint_cam.timestamp = new_timestamp
+            print(viewpoint_cam.timestamp)
+
             render_pkg = render(viewpoint_cam, gaussians, pipe, background)
             img = render_pkg["render"].detach().clone().permute(1,2,0).cpu().numpy()
+            img = img[:, :, [2, 1, 0]]
 
     # When everything is done, release the window
     cv2.destroyAllWindows()
