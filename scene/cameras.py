@@ -71,15 +71,19 @@ class Camera:
         self.camera_center = self.world_view_transform.inverse()[3, :3]
         
         self.timestamp = timestamp
+        self._cached_rays = None
         
     def get_rays(self):
-        grid = create_meshgrid(self.image_height, self.image_width, normalized_coordinates=False)[0] + 0.5
-        i, j = grid.unbind(-1)
-        pts_view = torch.stack([(i-self.cx)/self.fl_x, (j-self.cy)/self.fl_y, torch.ones_like(i), torch.ones_like(i)], -1).to(self.data_device)
-        c2w = torch.linalg.inv(self.world_view_transform.transpose(0, 1))
-        pts_world =  pts_view @ c2w.T
-        directions = pts_world[...,:3] - self.camera_center[None,None,:]
-        return self.camera_center[None,None], directions / torch.norm(directions, dim=-1, keepdim=True)
+        if self._cached_rays is None:
+            grid = create_meshgrid(self.image_height, self.image_width, normalized_coordinates=False)[0] + 0.5
+            i, j = grid.unbind(-1)
+            pts_view = torch.stack([(i-self.cx)/self.fl_x, (j-self.cy)/self.fl_y, torch.ones_like(i), torch.ones_like(i)], -1).to(self.data_device)
+            c2w = torch.linalg.inv(self.world_view_transform.transpose(0, 1))
+            pts_world =  pts_view @ c2w.T
+            directions = pts_world[...,:3] - self.camera_center[None,None,:]
+            self._cached_rays = self.camera_center[None,None], directions / torch.norm(directions, dim=-1, keepdim=True)
+        
+        return self._cached_rays
     
     def cuda(self):
         cuda_copy = deepcopy(self)

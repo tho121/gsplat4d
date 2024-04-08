@@ -24,6 +24,7 @@ import json
 from utils.graphics_utils import focal2fov, fov2focal
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getProjectionMatrixCenterShift
 from kornia import create_meshgrid
+import cv2
 
 class ViewerCameraInfo:
     def __init__(self, R, T, FovY, FovX, width, height, timestamp=0.0, fl_x=-1.0, fl_y=-1.0, cx=-1.0, cy=-1.0):
@@ -147,6 +148,64 @@ def readCamerasFromTransforms(transformsfilePath, time_duration=None, frame_rati
         FovX = fovx
         return ViewerCameraInfo(R=R, T=T, FovY=FovY, FovX=FovX, width=width, height=height, timestamp=timestamp)
 
+def rotation_matrix(axis, angle_degrees):
+    angle_radians = np.radians(angle_degrees)
+    if axis == 'x':
+        return np.array([[1, 0, 0],
+                         [0, np.cos(angle_radians), -np.sin(angle_radians)],
+                         [0, np.sin(angle_radians), np.cos(angle_radians)]])
+    elif axis == 'y':
+        return np.array([[np.cos(angle_radians), 0, np.sin(angle_radians)],
+                         [0, 1, 0],
+                         [-np.sin(angle_radians), 0, np.cos(angle_radians)]])
+    elif axis == 'z':
+        return np.array([[np.cos(angle_radians), -np.sin(angle_radians), 0],
+                         [np.sin(angle_radians), np.cos(angle_radians), 0],
+                         [0, 0, 1]])
+    else:
+        raise ValueError("Unknown rotation axis")
+
+def update_camera(key, camera):
+    translation_speed = 0.1  # Adjust the speed as necessary
+    rotation_speed = 5.0  # Adjust the angle in degrees as necessary
+
+    # Get current R and T
+    R = camera.R
+    T = camera.T
+
+    # Define the translation increments based on current rotation
+    if key == ord('w'):  # Move down in the world (which appears as "up" in your camera)
+        T -= np.array([0, 0, translation_speed])
+    elif key == ord('s'):  # Move up in the world (which appears as "down" in your camera)
+        T += np.array([0, 0, translation_speed])
+    elif key == ord('a'):  # Move right in the world (which appears as "left" in your camera)
+        T += np.array([translation_speed, 0, 0])
+    elif key == ord('d'):  # Move forward in the world (which appears as "into the screen" in your camera)
+        T -= np.array([translation_speed, 0, 0])
+    elif key == ord('c'):  # Move backward in the world (which appears as "coming out of the screen" in your camera)
+        T += np.array([0, translation_speed, 0])
+    elif key == ord('z'):  # Move left in the world (which appears as "right" in your camera)
+        T -= np.array([0, translation_speed, 0])
+
+
+    # Define the rotation increments
+    if key == 82:  # Up arrow - Pitch down
+        R = R @ rotation_matrix('x', -rotation_speed)
+    elif key == 84:  # Down arrow - Pitch up
+        R = R @ rotation_matrix('x', rotation_speed)
+    elif key == 81:  # Left arrow - Yaw left
+        R = R @ rotation_matrix('y', -rotation_speed)
+    elif key == 83:  # Right arrow - Yaw right
+        R = R @ rotation_matrix('y', rotation_speed)
+
+    # Reset rotation to identity matrix
+    if key == ord('x'):  # Reset rotation
+        R = np.eye(3)
+
+    # Update the camera's R and T
+    camera.update(R, T)
+
+    return camera
 
 def viewing(dataset, opt, pipe, checkpoint,
              gaussian_dim, time_duration, rot_4d, force_sh_3d, args):
@@ -184,8 +243,35 @@ def viewing(dataset, opt, pipe, checkpoint,
     target_timestamp = 1.0
     viewpoint_cam.timestamp = target_timestamp
 
-    render_pkg = render(viewpoint_cam, gaussians, pipe, background)
-    img = render_pkg["render"]
+    
+
+
+    with torch.no_grad():
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background)
+        img = render_pkg["render"].detach().clone().permute(1,2,0).cpu().numpy()
+
+        cv2.namedWindow('Render', cv2.WINDOW_NORMAL)
+
+        while True:
+            # Render the image to the window
+            cv2.imshow('Render', img)
+
+            # Wait for a key event
+            key = cv2.waitKey(0) & 0xFF
+            print(key)
+            if key == 27:  # Exit on ESC
+                break
+
+            # Update the camera based on the key
+            viewpoint_cam = update_camera(key, viewpoint_cam).cuda()
+
+            render_pkg = render(viewpoint_cam, gaussians, pipe, background)
+            img = render_pkg["render"].detach().clone().permute(1,2,0).cpu().numpy()
+
+    # When everything is done, release the window
+    cv2.destroyAllWindows()
+
+    
 
 
 
